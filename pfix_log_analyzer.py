@@ -29,8 +29,8 @@ msg_id_pattern = re.compile('message-id=<(.*)>')
 msg_data = {}
 queue_id_index = {}
 # connection_timestamp
-# connection_host
-# connection_ip
+# connecting_host
+# connecting_ip
 # disconnect_timestamp
 # queue_id
 # from_address
@@ -43,16 +43,24 @@ queue_id_index = {}
 def print_record(msg):
     print "**********************************"
     print "connect_time:", msg.get('connect_time', '')
-    print "connection_host:", msg.get('connection_host', '')
-    print "connection_ip:", msg.get('connection_ip', '')
+    print "connecting_host:", msg.get('connecting_host', '')
+    print "connecting_ip:", msg.get('connecting_ip', '')
     print "disconnect_time:", msg.get('disconnect_time', '')
     print "queue_id:", msg.get('queue_id', '')
     print "from_address:", msg.get('from_address', '')
     print "to_address:", msg.get('to_address', '')
     print "helo_host:", msg.get('helo_host', '')
     print "message_id:", msg.get('message_id', '')
+    print "relay_host:", msg.get('relay_host', '')
+    print "relay_ip:", msg.get('relay_ip', '')
     print "delivery_status:", msg.get('delivery_status', '')
     print "delivery_status_msg:", msg.get('delivery_status_msg', '')
+
+class ParseError(Exception):
+    def __init__(self, log_line, value):
+        self.value = value
+    def __str__(self):
+        return "at line %d: %s" % (log_line), str(self.value)
 
 def match_token(tgt, token_list):
     tok = token_list.pop(0)
@@ -65,7 +73,10 @@ def match_token(tgt, token_list):
     elif tgt == "QID" and qid_pattern.match(tok):
         return tok
     else:
-        raise ValueError("parsing error at line", line_count, ": expecting", tgt, "got", tok)
+        raise ParseError(line_count, "expecting %s got %s" % (tgt, tok))
+
+def push_token(tok, token_list):
+    token_list.insert(0, tok)
 
 def lookahead(token_list):
     return token_list[0]
@@ -143,9 +154,9 @@ def match_smtpd(timestamp, pid, token_list):
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
             msg_data[unique_id] = {}
-            msg_data[unique_id]["connection_host"] = host_name
+            msg_data[unique_id]["connecting_host"] = host_name
             msg_data[unique_id]["connect_time"] = timestamp
-            msg_data[unique_id]["connection_ip"] = ip_addr
+            msg_data[unique_id]["connecting_ip"] = ip_addr
     elif next_token == 'disconnect':
         # Disconnect, print the record and clear it.
         if match_token('from', token_list):
@@ -201,12 +212,28 @@ def match_smtp(token_list):
         unique_id = get_unique_id(queue_id)
 
         next_token = match_token('ANY', token_list)
-        # TODO: do some checking here to make sure it's correct.
-        (to_label, to_addr) = next_token.split("=", 1)
-        if unique_id:     # TODO: temporary
+        try:
+            # Parse each of the name/value pairs.
+            (to_label, to_addr) = next_token.split("=", 1)
+            if to_label != "to":
+                push_token(next_token, token_list)
+                raise ParseError(line_count, "expecting TO address, got [%s]" % " ".join(token_list))
             msg_data[unique_id]['to_address'] = to_addr[1:-2]
-            print_record(msg_data[unique_id])
-        
+
+            next_token = match_token('ANY', token_list)
+            (relay_label, relay_system) = next_token.split('=', 1)
+            if relay_label != 'relay':
+                push_token(next_token, token_list)
+                raise ParseError(line_count, "expecting RELAY, got [%s]" % " ".join(token_list))
+            (relay_host, relay_ip) = match_host_ip(relay_system)
+            msg_data[unique_id]['relay_host'] = relay_host
+            msg_data[unique_id]['relay_ip'] = relay_ip
+
+        except ValueError as e:
+            raise ParseError(line_count, "expecting smtp name/value pairs, got %s" % " ".join(token_list))
+        except ParseError as e:
+            raise
+
 
 def match_qmgr(token_list):
     queue_id = match_token('QID', token_list)[:-1]
