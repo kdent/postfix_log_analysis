@@ -234,9 +234,15 @@ def match_cleanup(token_list):
             # TODO: smtp record required here. Put this back when that's done. For now, ignore.
         return
 
-    next_token = match_token('ANY', token_list)
-    msg_id = match_message_id(next_token)
-    msg_data[unique_id]['message_id'] = msg_id
+    next_token = lookahead(token_list)
+    if next_token == "reject:":
+        match_token('reject:', token_list)
+        msg_data[unique_id]['delivery_status'] = "reject"
+        msg_data[unique_id]['delivery_status_msg'] = " ".join(token_list)
+    else:
+        next_token = match_token('ANY', token_list)
+        msg_id = match_message_id(next_token)
+        msg_data[unique_id]['message_id'] = msg_id
 
 def match_timestamp(line):
     (month, day, timestr, host, remainder) = line.split(None, 4)
