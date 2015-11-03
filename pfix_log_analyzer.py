@@ -20,7 +20,7 @@ month_to_int['Oct'] = 10
 month_to_int['Nov'] = 11
 month_to_int['Dec'] = 12
 
-log_line_pattern = re.compile(".*postfix/(anvil|cleanup|master|postfix-script|qmgr|smtp|smtpd)\[(\d+)\]: (.*)")
+log_line_pattern = re.compile(".*postfix/(anvil|cleanup|master|postfix-script|qmgr|smtp|smtpd|scache)\[(\d+)\]: (.*)")
 host_and_ip_pattern = re.compile('(\S+)\[([\d\.]+)\]')
 ip_pattern = re.compile('\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:{0,1}')
 qid_pattern = re.compile('[0-9A-Z]{10}:{0,1}')
@@ -57,10 +57,10 @@ def print_record(msg):
     print "delivery_status_msg:", msg.get('delivery_status_msg', '')
 
 class ParseError(Exception):
-    def __init__(self, log_line, value):
-        self.value = value
+    def __init__(self, line_count, value):
+        self.value = value + " at line: %d" % line_count
     def __str__(self):
-        return "at line %d: %s" % (log_line), str(self.value)
+        return repr(self.value)
 
 def match_token(tgt, token_list):
     tok = token_list.pop(0)
@@ -83,22 +83,65 @@ def lookahead(token_list):
 
 def get_unique_id(queue_id):
     unique_id = queue_id_index.get(queue_id, None)
-#    unique_id = None
-#    try:
-#        unique_id = queue_id_index[queue_id]
-#    except KeyError as e:
-#        raise ValueError("cannot find unique ID value for queue ID", queue_id, "at line", line_count)
     return unique_id
+
+# Build a hash map of name value pairs
+def match_nv_pairs(str):
+
+    # Make a simple state transition table
+    # States are (0 ON_NAME), (1 ON_VALUE), (2 IN_BRACKET), (3 BETWEEN)
+    # Alphabet: { char, open (<), close (>), equal, space, comma }
+    state = [
+        {'char': 0, 'open': 0, 'close': 0, 'equal': 1, 'space': 0, 'comma': 0},
+        {'char': 1, 'open': 2, 'close': 1, 'equal': 1, 'space': 3, 'comma': 3},
+        {'char': 2, 'open': 2, 'close': 1, 'equal': 2, 'space': 2, 'comma': 2},
+        {'char': 0, 'open': 0, 'close': 0, 'equal': 0, 'space': 3, 'comma': 3}
+    ]
+    cur_state = 0
+    next_state = 0
+    alpha = ''
+
+    nv_pairs = {}
+    cur_name = ''
+    cur_str = ''
+    for c in str:
+        if c == '<': alpha = 'open'
+        elif c == '>': alpha = 'close'
+        elif c == '=': alpha = 'equal'
+        elif c == ' ': alpha = 'space'
+        elif c == ',': alpha = 'comma'
+        else: alpha = 'char'
+
+        next_state = state[cur_state][alpha]
+        if cur_state != next_state: # Check for a state transition
+            if cur_state == 0:      # ON_NAME
+                cur_name = cur_str
+                cur_str = ''
+            elif cur_state == 3:    # BETWEEN
+                nv_pairs[cur_name] = cur_str
+                cur_name = ''
+                cur_str = c
+        else:
+            # TODO: FIX: spaces are getting dropped in bracketed values.
+            if alpha == 'char' or (state == 2 and alpha == 'space'):
+                cur_str += c
+        cur_state = next_state
+    if len(cur_name) > 0 and len(cur_str) > 0:
+        nv_pairs[cur_name] = cur_str
+
+    return nv_pairs
 
 # Extract host and IP from patterns like fg5xc.lsbg.download[94.156.37.9]
 def match_host_ip(str):
 
-    if str == 'unknown[unknown]':    # check the special case
+    if str == 'unknown[unknown]':    # check the special cases
         return ('unknown', 'unknown')
+    elif str == 'none':
+        return ('none', 'none')
 
     m = host_and_ip_pattern.match(str)
     if not m:
-        raise ValueError("parse error: couldn't match a host and IP address in", str, "at line", line_count)
+        raise ParseError(line_count, "parse error: couldn't match a host and IP address in [%s]" % str)
     host_name = m.group(1)
     ip_addr = m.group(2)
     return (host_name, ip_addr)
@@ -110,37 +153,21 @@ def match_message_id(str):
     else:
         raise ValueError("parse error: expecting message ID, line", line_count, "with input:", str)
 
-def match_reject_msg(pid, token_list):
+def match_reject_msg(unique_id, token_list):
     # Make the sequence of tokens a string to do regex matching.
     line = " ".join(token_list)
     m = re.match('(.*);(.*)', line)
     reject_msg = m.group(1)
     nv_pairs_str = m.group(2)
-    ip_addr = None
-    msg_token_list = reject_msg.split()
-    if match_token('RCPT', token_list):
-        match_token('from', token_list)
-        tok = match_token('ANY', token_list)
-        if tok:
-            (host, ip_addr) = match_host_ip(tok)
-    if ip_addr:
-        unique_id = pid + ip_addr
-        msg_data[unique_id]['queue_id'] = "NOQUEUE"
-        msg_data[unique_id]['delivery_status'] = "reject"
-        msg_data[unique_id]['delivery_status_msg'] = reject_msg[reject_msg.index(':')+2:]
-        for nv_pair in nv_pairs_str.split():
-            try:
-                (name, value) = nv_pair.split("=", 1)
-            except ValueError as e:
-                print "parsing error at line", line_count, "with input:", nv_pairs_str
-                raise
-            # Assign attributes eliminating angle brackets.
-            if name == "from":
-                msg_data[unique_id]["from_address"] = value[1:-1]
-            if name == "to":
-                msg_data[unique_id]["to_address"] = value[1:-1]
-            if name == "helo":
-                msg_data[unique_id]["helo_host"] = value[1:-1]
+
+    msg_data[unique_id]['queue_id'] = "NOQUEUE"
+    msg_data[unique_id]['delivery_status'] = "reject"
+#    msg_data[unique_id]['delivery_status_msg'] = reject_msg[reject_msg.index(':')+2:]
+    msg_data[unique_id]['delivery_status_msg'] = reject_msg
+    nv_pair_map = match_nv_pairs(nv_pairs_str)
+    msg_data[unique_id]["from_address"] = nv_pair_map.get('from', '')
+    msg_data[unique_id]["to_address"] = nv_pair_map.get('to', '')
+    msg_data[unique_id]["helo_host"] = nv_pair_map.get('helo', '')
 
 def match_smtpd(timestamp, pid, token_list):
 
@@ -164,13 +191,18 @@ def match_smtpd(timestamp, pid, token_list):
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
             msg_data[unique_id]["disconnect_time"] = timestamp
-            qid = msg_data.get('queue_id')
-            if qid == 'NOQUEUE' and msg_data[unique_id].get("delivery_status") != "lost":
+
+            if msg_data[unique_id].get("queue_id") == 'NOQUEUE':
                 print_record(msg_data[unique_id])
 
     elif next_token == 'NOQUEUE:':
         match_token('reject:', token_list)
-        match_reject_msg(pid, token_list)
+        match_token('ANY', token_list)
+        match_token('from', token_list)
+        (host_name, ip_addr) = match_host_ip(match_token('ANY', token_list))
+        unique_id = pid + ip_addr
+        match_reject_msg(unique_id, token_list)
+        msg_data[unique_id]['queue_id'] = 'NOQUEUE'
     elif next_token == 'warning:':
         return        # ignore warning message
     elif next_token == 'lost':   # lost connection
@@ -186,7 +218,7 @@ def match_smtpd(timestamp, pid, token_list):
         next_token = match_token('ANY', token_list)
         (host, ip_addr) = match_host_ip(next_token)
         unique_id = pid + ip_addr
-        msg_data[unique_id]['delivery_status'] = "lost"
+        # TODO: record this in the message record
     elif next_token == 'timeout':
         match_token('after', token_list)
         return # ignore timeout warning messages
@@ -200,66 +232,56 @@ def match_smtpd(timestamp, pid, token_list):
         queue_id_index[queue_id] = unique_id
     else:
         token_list.insert(0, next_token)
-        print "SMTPD", token_list
+        raise ParseError(line_count, "Unrecognized token %s in %s" % (next_token, token_list))
 
 def match_smtp(token_list):
-    print "SMTP:", token_list
+
     next_token = match_token('ANY', token_list)
     if next_token == 'connect':
         match_token('to', token_list)
     elif qid_pattern.match(next_token):
         queue_id = next_token[0:-1]
         unique_id = get_unique_id(queue_id)
+        if not unique_id:
+            raise ParseError(line_count, "no unique_id for queue_id %s" % queue_id)
 
-        next_token = match_token('ANY', token_list)
-        try:
-            # Parse each of the name/value pairs.
-            (to_label, to_addr) = next_token.split("=", 1)
-            if to_label != "to":
-                push_token(next_token, token_list)
-                raise ParseError(line_count, "expecting TO address, got [%s]" % " ".join(token_list))
-            msg_data[unique_id]['to_address'] = to_addr[1:-2]
-
-            next_token = match_token('ANY', token_list)
-            (relay_label, relay_system) = next_token.split('=', 1)
-            if relay_label != 'relay':
-                push_token(next_token, token_list)
-                raise ParseError(line_count, "expecting RELAY, got [%s]" % " ".join(token_list))
-            (relay_host, relay_ip) = match_host_ip(relay_system)
-            msg_data[unique_id]['relay_host'] = relay_host
-            msg_data[unique_id]['relay_ip'] = relay_ip
-
-        except ValueError as e:
-            raise ParseError(line_count, "expecting smtp name/value pairs, got %s" % " ".join(token_list))
-        except ParseError as e:
-            raise
-
+        # Parse each of the name/value pairs.
+        nv_pairs = match_nv_pairs(' '.join(token_list))
+        msg_data[unique_id]['to_address'] = nv_pairs.get('to','')
+        (relay_host, relay_ip) = match_host_ip(nv_pairs.get('relay', ''))
+        msg_data[unique_id]['relay_host'] = relay_host
+        msg_data[unique_id]['relay_ip'] = relay_ip
+        msg_data[unique_id]['delivery_status'] = nv_pairs.get('status', '')
+        # TODO: I'm not sure how reliable this one is
+        msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list[-3:])
 
 def match_qmgr(token_list):
     queue_id = match_token('QID', token_list)[:-1]
-    unique_id = queue_id_index.get(queue_id)
+    unique_id = get_unique_id(queue_id)
     if not unique_id:
-#            raise ValueError("parse error: unable to locate message record for queue ID", queue_id, "at line", line_count, "in log")
-        # TODO: for messages that are created internally, process smtp lines to create a msg_data record for now, just ignore
-        return
+        unique_id = queue_id  # messages that originate in the system
+        queue_id_index[queue_id] = unique_id
+        msg_data[unique_id] = {}
 
     tok = lookahead(token_list)
     if tok == 'removed':
         print_record(msg_data[unique_id])
         # TODO: clear msg_data record
-    elif qid_pattern.match(tok):
-        (from_label, from_addr) = tok.split('=', 1)
-        msg_data[unique_id]['from_address'] = from_addr[1:-1]
-        msg_data[unique_id]['delivery_status'] = "queued for delivery"
+    else:
+        token_list_str = ' '.join(token_list)
+        nv_pairs = match_nv_pairs(token_list_str)
+        msg_data[unique_id]['from_address'] = nv_pairs.get('from', '')
+        msg_data[unique_id]['delivery_status'] = "queued"
+        msg_data[unique_id]['delivery_status_msg'] = "queued for delivery"
         # TODO: add code to capture message size and number of recipients
 
 def match_cleanup(token_list):
     queue_id = match_token('QID', token_list)[:-1]
-    unique_id = queue_id_index.get(queue_id)
+    unique_id = get_unique_id(queue_id)
     if not unique_id:
-#            raise ValueError("parse error: unable to locate message record for queue ID", queue_id, "at line", line_count, "in log")
-            # TODO: smtp record required here. Put this back when that's done. For now, ignore.
-        return
+        unique_id = queue_id  # messages that originate in the system
+        queue_id_index[queue_id] = unique_id
+        msg_data[unique_id] = {}
 
     next_token = lookahead(token_list)
     if next_token == "reject:":
@@ -289,7 +311,7 @@ def parse(line):
     program = m.group(1)
     pid = m.group(2)
     remainder = m.group(3)
-    if program == "anvil" or program == "master" or program == "postfix-script":
+    if program == "anvil" or program == "master" or program == "postfix-script" or program == "scache":
         return    # ignore non-message handling programs
 
     token_list = remainder.split()
@@ -317,5 +339,4 @@ with open(logfile, 'r') as f:
     for line in f:
         line_count += 1
         parse(line)
-
 
