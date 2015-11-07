@@ -191,10 +191,8 @@ def match_smtpd(timestamp, pid, token_list):
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
             msg_data[unique_id]["disconnect_time"] = timestamp
-
             if msg_data[unique_id].get("queue_id") == 'NOQUEUE':
                 print_record(msg_data[unique_id])
-
     elif next_token == 'NOQUEUE:':
         match_token('reject:', token_list)
         match_token('ANY', token_list)
@@ -222,6 +220,20 @@ def match_smtpd(timestamp, pid, token_list):
     elif next_token == 'timeout':
         match_token('after', token_list)
         return # ignore timeout warning messages
+    elif next_token == 'too':
+        match_token('many', token_list)
+        match_token('errors', token_list)
+        match_token('after', token_list)
+        match_token('ANY', token_list)
+        match_token('(approximately', token_list)
+        match_token('ANY', token_list)
+        match_token('bytes)', token_list)
+        match_token('from', token_list)
+        next_token = match_token('ANY', token_list)
+        (host, ip_addr) = match_host_ip(next_token)
+        unique_id = pid + ip_addr
+        msg_data[unique_id]['delivery_status'] = 'reject'
+        msg_data[unique_id]['delivery_status_msg'] = 'too many errors'
     elif qid_pattern.match(next_token):
         queue_id = next_token[0:-1]
         next_token = match_token('ANY', token_list)
@@ -234,26 +246,43 @@ def match_smtpd(timestamp, pid, token_list):
         token_list.insert(0, next_token)
         raise ParseError(line_count, "Unrecognized token %s in %s" % (next_token, token_list))
 
+#
+# Grammar:
+#   connect to HOST_IP
+#   QID NVPAIR [host HOST_IP said: TEXT_MSG EOL|(, NVPAIR)*]
+#
 def match_smtp(token_list):
 
     next_token = match_token('ANY', token_list)
     if next_token == 'connect':
         match_token('to', token_list)
     elif qid_pattern.match(next_token):
+
+        # Get the unique ID for this entry.
         queue_id = next_token[0:-1]
         unique_id = get_unique_id(queue_id)
         if not unique_id:
-            raise ParseError(line_count, "no unique_id for queue_id %s" % queue_id)
+            raise ParseError(line_count,
+                "no unique_id for queue_id %s" % queue_id)
 
-        # Parse each of the name/value pairs.
-        nv_pairs = match_nv_pairs(' '.join(token_list))
-        msg_data[unique_id]['to_address'] = nv_pairs.get('to','')
-        (relay_host, relay_ip) = match_host_ip(nv_pairs.get('relay', ''))
-        msg_data[unique_id]['relay_host'] = relay_host
-        msg_data[unique_id]['relay_ip'] = relay_ip
-        msg_data[unique_id]['delivery_status'] = nv_pairs.get('status', '')
-        # TODO: I'm not sure how reliable this one is
-        msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list[-3:])
+        # Either Parse name/value pairs or get host message.
+        next_token = match_token('ANY', token_list)
+        if next_token == 'host':
+            next_token = match_token('ANY', token_list)
+            (host, ip_addr) = match_host_ip(next_token)
+            match_token('said:', token_list)
+            msg_data[unique_id]['delivery_status'] = 'not sent'
+            msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list)
+        else:
+            push_token(next_token, token_list)
+            nv_pairs = match_nv_pairs(' '.join(token_list))
+            msg_data[unique_id]['to_address'] = nv_pairs.get('to','')
+            (relay_host, relay_ip) = match_host_ip(nv_pairs.get('relay', ''))
+            msg_data[unique_id]['relay_host'] = relay_host
+            msg_data[unique_id]['relay_ip'] = relay_ip
+            msg_data[unique_id]['delivery_status'] = nv_pairs.get('status', '')
+            # TODO: I'm not sure how reliable this one is
+            msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list[-3:])
 
 def match_qmgr(token_list):
     queue_id = match_token('QID', token_list)[:-1]
