@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 from datetime import datetime, date, time
+import csv
 import re
 import sys
 
@@ -20,7 +21,7 @@ month_to_int['Oct'] = 10
 month_to_int['Nov'] = 11
 month_to_int['Dec'] = 12
 
-log_line_pattern = re.compile(".*postfix/(anvil|cleanup|master|postfix-script|qmgr|smtp|smtpd|scache)\[(\d+)\]: (.*)")
+log_line_pattern = re.compile(".*postfix/(anvil|cleanup|master|postfix-script|qmgr|smtp|smtpd|scache|pickup|local|bounce|postsuper)\[(\d+)\]: (.*)")
 host_and_ip_pattern = re.compile('(\S+)\[([\d\.]+)\]')
 ip_pattern = re.compile('\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:{0,1}')
 qid_pattern = re.compile('[0-9A-Z]{10}:{0,1}')
@@ -41,20 +42,34 @@ queue_id_index = {}
 # delivery_status_msg
 
 def print_record(msg):
-    print "**********************************"
-    print "connect_time:", msg.get('connect_time', '')
-    print "connecting_host:", msg.get('connecting_host', '')
-    print "connecting_ip:", msg.get('connecting_ip', '')
-    print "disconnect_time:", msg.get('disconnect_time', '')
-    print "queue_id:", msg.get('queue_id', '')
-    print "from_address:", msg.get('from_address', '')
-    print "to_address:", msg.get('to_address', '')
-    print "helo_host:", msg.get('helo_host', '')
-    print "message_id:", msg.get('message_id', '')
-    print "relay_host:", msg.get('relay_host', '')
-    print "relay_ip:", msg.get('relay_ip', '')
-    print "delivery_status:", msg.get('delivery_status', '')
-    print "delivery_status_msg:", msg.get('delivery_status_msg', '')
+#    print "**********************************"
+#    print "connect_time:", msg.get('connect_time', '')
+#    print "connecting_host:", msg.get('connecting_host', '')
+#    print "connecting_ip:", msg.get('connecting_ip', '')
+#    print "disconnect_time:", msg.get('disconnect_time', '')
+#    print "queue_id:", msg.get('queue_id', '')
+#    print "from_address:", msg.get('from_address', '')
+#    print "to_address:", msg.get('to_address', '')
+#    print "helo_host:", msg.get('helo_host', '')
+#    print "message_id:", msg.get('message_id', '')
+#    print "relay_host:", msg.get('relay_host', '')
+#    print "relay_ip:", msg.get('relay_ip', '')
+#    print "delivery_status:", msg.get('delivery_status', '')
+#    print "delivery_status_msg:", msg.get('delivery_status_msg', '')
+    csvout.writerow([msg.get('connect_time', ''),
+        msg.get('connecting_host', ''),
+        msg.get('connecting_ip', ''),
+        msg.get('disconnect_time', ''),
+        msg.get('queue_id', ''),
+        msg.get('from_address', ''),
+        msg.get('to_address', ''),
+        msg.get('helo_host', ''),
+        msg.get('message_id', ''),
+        msg.get('relay_host', ''),
+        msg.get('relay_ip', ''),
+        msg.get('delivery_status', ''),
+        msg.get('delivery_status_msg', '')
+    ])
 
 class ParseError(Exception):
     def __init__(self, line_count, value):
@@ -71,7 +86,10 @@ def match_token(tgt, token_list):
     elif tgt == "IPADDR" and ip_pattern.match(tok):
         return tok
     elif tgt == "QID" and qid_pattern.match(tok):
-        return tok
+        return tok[:-1]
+    elif tgt == "MSGID":
+        m = msg_id_pattern.match(tok)
+        return(m.group(1))
     else:
         raise ParseError(line_count, "expecting %s got %s" % (tgt, tok))
 
@@ -146,13 +164,6 @@ def match_host_ip(str):
     ip_addr = m.group(2)
     return (host_name, ip_addr)
 
-def match_message_id(str):
-    m = msg_id_pattern.match(str)
-    if m:
-        return(m.group(1))
-    else:
-        raise ValueError("parse error: expecting message ID, line", line_count, "with input:", str)
-
 def match_reject_msg(unique_id, token_list):
     # Make the sequence of tokens a string to do regex matching.
     line = " ".join(token_list)
@@ -191,8 +202,9 @@ def match_smtpd(timestamp, pid, token_list):
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
             msg_data[unique_id]["disconnect_time"] = timestamp
-            if msg_data[unique_id].get("queue_id") == 'NOQUEUE':
+            if msg_data[unique_id].get('delivery_status') == 'reject':
                 print_record(msg_data[unique_id])
+                del msg_data[unique_id]
     elif next_token == 'NOQUEUE:':
         match_token('reject:', token_list)
         match_token('ANY', token_list)
@@ -253,39 +265,41 @@ def match_smtpd(timestamp, pid, token_list):
 #
 def match_smtp(token_list):
 
-    next_token = match_token('ANY', token_list)
+    next_token = lookahead(token_list)
     if next_token == 'connect':
+        match_token('connect', token_list)
         match_token('to', token_list)
-    elif qid_pattern.match(next_token):
-
-        # Get the unique ID for this entry.
-        queue_id = next_token[0:-1]
+    else:
+        queue_id = match_token('QID', token_list)
         unique_id = get_unique_id(queue_id)
         if not unique_id:
             raise ParseError(line_count,
                 "no unique_id for queue_id %s" % queue_id)
-
-        # Either Parse name/value pairs or get host message.
-        next_token = match_token('ANY', token_list)
+        next_token = lookahead(token_list)
         if next_token == 'host':
+            match_token('host', token_list)
             next_token = match_token('ANY', token_list)
             (host, ip_addr) = match_host_ip(next_token)
             match_token('said:', token_list)
+            msg_data[unique_id]['queue_id'] = queue_id
             msg_data[unique_id]['delivery_status'] = 'not sent'
             msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list)
         else:
-            push_token(next_token, token_list)
-            nv_pairs = match_nv_pairs(' '.join(token_list))
+            msg_data[unique_id]['queue_id'] = queue_id
+            log_line = ' '.join(token_list)
+            nv_pairs = match_nv_pairs(log_line)
             msg_data[unique_id]['to_address'] = nv_pairs.get('to','')
             (relay_host, relay_ip) = match_host_ip(nv_pairs.get('relay', ''))
             msg_data[unique_id]['relay_host'] = relay_host
             msg_data[unique_id]['relay_ip'] = relay_ip
             msg_data[unique_id]['delivery_status'] = nv_pairs.get('status', '')
-            # TODO: I'm not sure how reliable this one is
-            msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list[-3:])
+            m = re.search("\((.+)\)", log_line)
+            if m:
+                msg_data[unique_id]['delivery_status_msg'] = m.group(1)
+        print_record(msg_data[unique_id])
 
 def match_qmgr(token_list):
-    queue_id = match_token('QID', token_list)[:-1]
+    queue_id = match_token('QID', token_list)
     unique_id = get_unique_id(queue_id)
     if not unique_id:
         unique_id = queue_id  # messages that originate in the system
@@ -294,18 +308,24 @@ def match_qmgr(token_list):
 
     tok = lookahead(token_list)
     if tok == 'removed':
-        print_record(msg_data[unique_id])
-        # TODO: clear msg_data record
+#        del msg_data[unique_id]
+        # TODO: figure out when it's safe to delete a record.
+        0
     else:
         token_list_str = ' '.join(token_list)
         nv_pairs = match_nv_pairs(token_list_str)
+        msg_data[unique_id]['queue_id'] = queue_id
         msg_data[unique_id]['from_address'] = nv_pairs.get('from', '')
-        msg_data[unique_id]['delivery_status'] = "queued"
-        msg_data[unique_id]['delivery_status_msg'] = "queued for delivery"
         # TODO: add code to capture message size and number of recipients
 
+#
+# Grammar:
+#   QID reject TEXT_MSG EOL
+#   QID MSG_ID
+#
+# pickup and cleanup are allowed to generate unique IDs based on the queue ID
 def match_cleanup(token_list):
-    queue_id = match_token('QID', token_list)[:-1]
+    queue_id = match_token('QID', token_list)
     unique_id = get_unique_id(queue_id)
     if not unique_id:
         unique_id = queue_id  # messages that originate in the system
@@ -313,14 +333,44 @@ def match_cleanup(token_list):
         msg_data[unique_id] = {}
 
     next_token = lookahead(token_list)
+    msg_data[unique_id]['queue_id'] = queue_id
     if next_token == "reject:":
         match_token('reject:', token_list)
         msg_data[unique_id]['delivery_status'] = "reject"
         msg_data[unique_id]['delivery_status_msg'] = " ".join(token_list)
     else:
-        next_token = match_token('ANY', token_list)
-        msg_id = match_message_id(next_token)
-        msg_data[unique_id]['message_id'] = msg_id
+        msg_data[unique_id]['message_id'] = match_token('MSGID', token_list)
+
+#
+# pickup and cleanup are allowed to generate unique IDs based on the queue ID
+#
+def match_pickup(pid, token_list):
+    queue_id = match_token('QID', token_list)
+    unique_id = get_unique_id(queue_id)
+    if not unique_id:
+        unique_id = queue_id
+        queue_id_index[queue_id] = unique_id
+        msg_data[unique_id] = {}
+
+    pairs = match_nv_pairs(' '.join(token_list))
+    msg_data[unique_id]['queue_id'] = queue_id
+    msg_data[unique_id]['from_address'] = pairs['from']
+
+def match_local(pid, token_list):
+    queue_id = match_token('QID', token_list)
+    unique_id = get_unique_id(queue_id)
+    if not unique_id:
+        raise ParseError(line_count, "no unique_id for queue_id %s" % queue_id)
+    line = ' '.join(token_list)
+    pairs = match_nv_pairs(line)
+    msg_data[unique_id]['to_address'] = pairs['to']
+    msg_data[unique_id]['queue_id'] = queue_id
+    msg_data[unique_id]['delivery_status'] = pairs['status']
+    m = re.search("\((.+)\)", line)
+    if m:
+        msg_data[unique_id]['delivery_status_msg'] = m.group(1)
+    if msg_data[unique_id]['delivery_status'] == 'sent':
+        print_record(msg_data[unique_id])
 
 def match_timestamp(line):
     (month, day, timestr, host, remainder) = line.split(None, 4)
@@ -340,8 +390,6 @@ def parse(line):
     program = m.group(1)
     pid = m.group(2)
     remainder = m.group(3)
-    if program == "anvil" or program == "master" or program == "postfix-script" or program == "scache":
-        return    # ignore non-message handling programs
 
     token_list = remainder.split()
     if program == "smtpd":
@@ -352,8 +400,10 @@ def parse(line):
         match_qmgr(token_list)
     elif program == "cleanup":
         match_cleanup(token_list)
-    else:
-        print "**UNKNOWN postfix command", program
+    elif program == "pickup":
+        match_pickup(pid, token_list)
+    elif program == "local":
+        match_local(pid, token_list)
 
 #
 # Start program execution
@@ -364,6 +414,21 @@ if len(sys.argv) != 2:
 
 logfile = sys.argv[1]
 line_count = 0
+csvout = csv.writer(sys.stdout)
+csvout.writerow(['Connection Timestamp',
+    'Connecting Host',
+    'Connecting IP',
+    'Disconnect Timestamp',
+    'Queue ID',
+    'From Address',
+    'To Address',
+    'Helo Host',
+    'Message ID',
+    'Relay Host',
+    'Relay IP',
+    'Delivery Status',
+    'Delivery Status Msg'
+])
 with open(logfile, 'r') as f:
     for line in f:
         line_count += 1
