@@ -91,7 +91,7 @@ def match_token(tgt, token_list):
         m = msg_id_pattern.match(tok)
         return(m.group(1))
     else:
-        raise ParseError(line_count, "expecting %s got %s" % (tgt, tok))
+        raise ParseError(line_count, "expecting '%s' got '%s'" % (tgt, tok))
 
 def push_token(tok, token_list):
     token_list.insert(0, tok)
@@ -215,6 +215,8 @@ def match_smtpd(timestamp, pid, token_list):
         msg_data[unique_id]['queue_id'] = 'NOQUEUE'
     elif next_token == 'warning:':
         return        # ignore warning message
+    elif next_token == 'table':
+        return        # ignore message about tables changing
     elif next_token == 'lost':   # lost connection
         match_token('connection', token_list)
         match_token('after', token_list)
@@ -256,7 +258,7 @@ def match_smtpd(timestamp, pid, token_list):
         queue_id_index[queue_id] = unique_id
     else:
         token_list.insert(0, next_token)
-        raise ParseError(line_count, "Unrecognized token %s in %s" % (next_token, token_list))
+        raise ParseError(line_count, "Unrecognized token '%s' in %s" % (next_token, token_list))
 
 #
 # Grammar:
@@ -269,6 +271,8 @@ def match_smtp(token_list):
     if next_token == 'connect':
         match_token('connect', token_list)
         match_token('to', token_list)
+    elif next_token == 'warning:':
+        return      # ignore warning message
     else:
         queue_id = match_token('QID', token_list)
         unique_id = get_unique_id(queue_id)
