@@ -29,7 +29,8 @@ msg_id_pattern = re.compile('message-id=<(.*)>')
 
 msg_data = {}
 queue_id_index = {}
-# connection_timestamp
+# connection_date
+# connection_time
 # connecting_host
 # connecting_ip
 # disconnect_timestamp
@@ -43,6 +44,7 @@ queue_id_index = {}
 
 def print_record(msg):
 #    print "**********************************"
+#    print "connect_date:", msg.get('connect_date', '')
 #    print "connect_time:", msg.get('connect_time', '')
 #    print "connecting_host:", msg.get('connecting_host', '')
 #    print "connecting_ip:", msg.get('connecting_ip', '')
@@ -56,7 +58,8 @@ def print_record(msg):
 #    print "relay_ip:", msg.get('relay_ip', '')
 #    print "delivery_status:", msg.get('delivery_status', '')
 #    print "delivery_status_msg:", msg.get('delivery_status_msg', '')
-    csvout.writerow([msg.get('connect_time', ''),
+    csvout.writerow([msg.get('connect_date', ''),
+        msg.get('connect_time', ''),
         msg.get('connecting_host', ''),
         msg.get('connecting_ip', ''),
         msg.get('disconnect_time', ''),
@@ -193,7 +196,8 @@ def match_smtpd(timestamp, pid, token_list):
             unique_id = pid + ip_addr
             msg_data[unique_id] = {}
             msg_data[unique_id]["connecting_host"] = host_name
-            msg_data[unique_id]["connect_time"] = timestamp
+            msg_data[unique_id]["connect_date"] = timestamp.date()
+            msg_data[unique_id]["connect_time"] = timestamp.time()
             msg_data[unique_id]["connecting_ip"] = ip_addr
     elif next_token == 'disconnect':
         # Disconnect, print the record and clear it.
@@ -239,9 +243,11 @@ def match_smtpd(timestamp, pid, token_list):
         match_token('errors', token_list)
         match_token('after', token_list)
         match_token('ANY', token_list)
-        match_token('(approximately', token_list)
-        match_token('ANY', token_list)
-        match_token('bytes)', token_list)
+        tok = lookahead(token_list)
+        if tok == '(approximately':
+            match_token('(approximately', token_list)
+            match_token('ANY', token_list)
+            match_token('bytes)', token_list)
         match_token('from', token_list)
         next_token = match_token('ANY', token_list)
         (host, ip_addr) = match_host_ip(next_token)
@@ -251,11 +257,20 @@ def match_smtpd(timestamp, pid, token_list):
     elif qid_pattern.match(next_token):
         queue_id = next_token[0:-1]
         next_token = match_token('ANY', token_list)
-        (client_label, host_ip_str) = next_token.split('=')
-        (host_name, ip_addr) = match_host_ip(host_ip_str)
-        unique_id = pid + ip_addr
-        msg_data[unique_id]['queue_id'] = queue_id
-        queue_id_index[queue_id] = unique_id
+        if next_token == 'reject:':
+            match_token('ANY', token_list)
+            match_token('from', token_list)
+            (host_name, ip_addr) = match_host_ip(match_token('ANY', token_list))
+            unique_id = pid + ip_addr
+            match_reject_msg(unique_id, token_list)
+            msg_data[unique_id]['queue_id'] = queue_id
+        else:
+            (client_label, host_ip_str) = next_token.split('=')
+            (host_name, ip_addr) = match_host_ip(host_ip_str)
+            unique_id = pid + ip_addr
+            msg_data[unique_id]['queue_id'] = queue_id
+            queue_id_index[queue_id] = unique_id
+
     else:
         token_list.insert(0, next_token)
         raise ParseError(line_count, "Unrecognized token '%s' in %s" % (next_token, token_list))
@@ -289,6 +304,8 @@ def match_smtp(token_list):
             msg_data[unique_id]['delivery_status'] = 'not sent'
             msg_data[unique_id]['delivery_status_msg'] = ' '.join(token_list)
         else:
+            if not unique_id in msg_data:
+                msg_data[unique_id] = {}
             msg_data[unique_id]['queue_id'] = queue_id
             log_line = ' '.join(token_list)
             nv_pairs = match_nv_pairs(log_line)
@@ -412,14 +429,21 @@ def parse(line):
 #
 # Start program execution
 #
-if len(sys.argv) != 2:
+fh = None
+logfile = None
+if not sys.stdin.isatty():
+    fh = sys.stdin
+elif len(sys.argv) != 2:
     print "usage: pfix_log_analyzer.py <log file>"
     sys.exit(1)
+else: 
+    logfile = sys.argv[1]
+    fh = open(logfile, 'r')
 
-logfile = sys.argv[1]
 line_count = 0
 csvout = csv.writer(sys.stdout)
-csvout.writerow(['Connection Timestamp',
+csvout.writerow(['Connection Date',
+    'Connection Time',
     'Connecting Host',
     'Connecting IP',
     'Disconnect Timestamp',
@@ -433,8 +457,8 @@ csvout.writerow(['Connection Timestamp',
     'Delivery Status',
     'Delivery Status Msg'
 ])
-with open(logfile, 'r') as f:
-    for line in f:
-        line_count += 1
-        parse(line)
+
+for line in fh:
+    line_count += 1
+    parse(line)
 
