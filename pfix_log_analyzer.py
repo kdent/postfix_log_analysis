@@ -194,6 +194,8 @@ def match_smtpd(timestamp, pid, token_list):
             tok = match_token('ANY', token_list)
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
+            if unique_id not in msg_data:
+                msg_data[unique_id] = {}
             msg_data[unique_id] = {}
             msg_data[unique_id]["connecting_host"] = host_name
             msg_data[unique_id]["connect_date"] = timestamp.date()
@@ -205,6 +207,8 @@ def match_smtpd(timestamp, pid, token_list):
             tok = match_token('ANY', token_list)
             (host_name, ip_addr) = match_host_ip(tok)
             unique_id = pid + ip_addr
+            if unique_id not in msg_data:
+                msg_data[unique_id] = {}
             msg_data[unique_id]["disconnect_time"] = timestamp
             if msg_data[unique_id].get('delivery_status') == 'reject':
                 print_record(msg_data[unique_id])
@@ -270,7 +274,9 @@ def match_smtpd(timestamp, pid, token_list):
             unique_id = pid + ip_addr
             msg_data[unique_id]['queue_id'] = queue_id
             queue_id_index[queue_id] = unique_id
-
+    elif next_token == 'fatal:':
+        if match_token('open', token_list):
+            return      # smtpd daemon has an error opening a db file
     else:
         token_list.insert(0, next_token)
         raise ParseError(line_count, "Unrecognized token '%s' in %s" % (next_token, token_list))
@@ -405,8 +411,7 @@ def parse(line):
     timestamp = match_timestamp(line)
     # Determine which Postfix program generated the log entry.
     m = log_line_pattern.match(line)
-    if not m:
-        print "ERROR: can't find postfix program in", line
+    if not m:       # Not a Postfix line (that we care about)
         return
     program = m.group(1)
     pid = m.group(2)
