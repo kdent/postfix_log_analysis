@@ -2,7 +2,7 @@
 import csv
 import sys
 
-rdr = csv.reader(sys.stdin)
+rdr = csv.reader(sys.stdin.read().split('\r'))
 out = csv.writer(sys.stdout)
 for row in rdr:
     if row[5] == 'Accepted':
