@@ -25,7 +25,7 @@ log_line_pattern = re.compile(".*postfix/(anvil|cleanup|master|postfix-script|qm
 host_and_ip_pattern = re.compile('(\S+)\[([\d\.]+)\]')
 ip_pattern = re.compile('\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:{0,1}')
 qid_pattern = re.compile('[0-9A-Z]{10}:{0,1}')
-msg_id_pattern = re.compile('message-id=<(.*)>')
+msg_id_pattern = re.compile('(resent-)?message-id=<(.*)>')
 
 msg_data = {}
 queue_id_index = {}
@@ -92,7 +92,7 @@ def match_token(tgt, token_list):
         return tok[:-1]
     elif tgt == "MSGID":
         m = msg_id_pattern.match(tok)
-        return(m.group(1))
+        return(m.group(2))
     else:
         raise ParseError(line_count, "expecting '%s' got '%s'" % (tgt, tok))
 
