@@ -10,6 +10,12 @@ for row in rdr:
             row[4] = 'spam'
         elif row[2].endswith('.qq.com'):
             row[4] = 'spam'
+        elif row[2].endswith('.us'):
+            row[4] = 'spam'
+        elif row[2].endswith('.rocks'):
+            row[4] = 'spam'
+        elif row[2].endswith('.amazonses'):
+            row[4] = 'spam'
         elif row[2].endswith('.xyz'):
             row[4] = 'spam'
         elif row[2].endswith('.pro'):
@@ -19,6 +25,12 @@ for row in rdr:
         elif row[2].endswith('.website'):
             row[4] = 'spam'
         elif row[2].endswith('groups.yahoo.com'):
+            row[4] = 'good'
+        elif row[2].endswith('bounces.amazon.com'):
+            row[4] = 'good'
+        elif row[2].endswith('bounce.google.com'):
+            row[4] = 'good'
+        elif row[2].endswith('nextdoor.com'):
             row[4] = 'good'
     out.writerow(row)
         
