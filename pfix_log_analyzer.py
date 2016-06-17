@@ -371,7 +371,6 @@ def match_cleanup(token_list):
         msg_data[unique_id]['delivery_status'] = "reject"
         msg_data[unique_id]['delivery_status_msg'] = " ".join(token_list)
     else:
-        print token_list
         msg_data[unique_id]['message_id'] = match_token('MSGID', token_list)
 
 #
