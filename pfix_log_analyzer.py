@@ -352,6 +352,9 @@ def match_qmgr(token_list):
 #
 # pickup and cleanup are allowed to generate unique IDs based on the queue ID
 def match_cleanup(token_list):
+    next_token = lookahead(token_list)
+    if next_token == 'warning:':
+        return
     queue_id = match_token('QID', token_list)
     unique_id = get_unique_id(queue_id)
     if not unique_id:
@@ -360,12 +363,15 @@ def match_cleanup(token_list):
         msg_data[unique_id] = {}
 
     next_token = lookahead(token_list)
+    if next_token == "warning:":
+        return
     msg_data[unique_id]['queue_id'] = queue_id
     if next_token == "reject:":
         match_token('reject:', token_list)
         msg_data[unique_id]['delivery_status'] = "reject"
         msg_data[unique_id]['delivery_status_msg'] = " ".join(token_list)
     else:
+        print token_list
         msg_data[unique_id]['message_id'] = match_token('MSGID', token_list)
 
 #
