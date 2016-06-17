@@ -41,6 +41,8 @@ queue_id_index = {}
 # message_id (ID|NOQUEUE)
 # delivery_status (reject)
 # delivery_status_msg
+# header_from
+# header_subject
 
 def print_record(msg):
 #    print "**********************************"
@@ -71,7 +73,9 @@ def print_record(msg):
         msg.get('relay_host', ''),
         msg.get('relay_ip', ''),
         msg.get('delivery_status', ''),
-        msg.get('delivery_status_msg', '')
+        msg.get('delivery_status_msg', ''),
+        msg.get('header_from'),
+        msg.get('header_subject')
     ])
 
 class ParseError(Exception):
@@ -352,6 +356,9 @@ def match_qmgr(token_list):
 #
 # pickup and cleanup are allowed to generate unique IDs based on the queue ID
 def match_cleanup(token_list):
+    next_token = lookahead(token_list)
+    if next_token == "warning:":
+        return
     queue_id = match_token('QID', token_list)
     unique_id = get_unique_id(queue_id)
     if not unique_id:
@@ -365,8 +372,32 @@ def match_cleanup(token_list):
         match_token('reject:', token_list)
         msg_data[unique_id]['delivery_status'] = "reject"
         msg_data[unique_id]['delivery_status_msg'] = " ".join(token_list)
-    else:
+        return
+
+    next_token = lookahead(token_list)
+    if msg_id_pattern.match(next_token):
         msg_data[unique_id]['message_id'] = match_token('MSGID', token_list)
+        return
+
+    next_token = lookahead(token_list)
+    if next_token == "warning:":
+        match_token("warning:", token_list)
+        match_token("header", token_list)
+        next_token = lookahead(token_list)
+        if next_token == "From:" or next_token == "Subject:":
+            contents = []
+            match_token('ANY', token_list)
+            for tok in token_list:
+                if tok == "from":
+                    next_token = lookahead(token_list)
+                    m = host_and_ip_pattern.match(next_token)
+                    if m:
+                        break
+                contents.append(tok)
+        if len(contents) > 0 and contents[0] == "From:":
+            msg_data[unique_id]['header_from'] = " ".join(contents)
+        elif len(contents) > 0 and contents[0] == "Subject:":
+            msg_data[unique_id]['header_subject'] = " ".join(contents)
 
 #
 # pickup and cleanup are allowed to generate unique IDs based on the queue ID
@@ -460,7 +491,9 @@ csvout.writerow(['Connection Date',
     'Relay Host',
     'Relay IP',
     'Delivery Status',
-    'Delivery Status Msg'
+    'Delivery Status Msg',
+    'Header From',
+    'Header Subject'
 ])
 
 for line in fh:
