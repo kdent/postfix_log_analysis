@@ -9,7 +9,7 @@ if len(sys.argv) < 2:
 
 
 csvout = csv.writer(sys.stdout)
-csvout.writerow(['Connection Date','Connection Time', 'From Address', 'To Address', 'Classification', 'Status'])
+csvout.writerow(['Connection Date','Connection Time', 'Queue ID', 'From Address', 'To Address', 'Classification', 'Status'])
 
 with open(sys.argv[1], 'rU') as fh:
     csvrdr = csv.reader(fh)
@@ -30,5 +30,5 @@ with open(sys.argv[1], 'rU') as fh:
             else:
                 status = row[13]
 
-        newrow = [row[0], row[1], row[6], row[7], '', status]
+        newrow = [row[0], row[1], row[5], row[6], row[7], '', status]
         csvout.writerow(newrow)
