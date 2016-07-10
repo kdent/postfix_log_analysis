@@ -33,5 +33,40 @@ for row in rdr:
             row[5] = 'good'
         elif row[3].endswith('nextdoor.com'):
             row[5] = 'good'
+        elif row[3].endswith('nytimes.com'):
+            row[5] = 'good'
+        elif row[3].endswith('theskimm.com'):
+            row[5] = 'good'
+        elif row[3].endswith('anthropologie.com'):
+            row[5] = 'good'
+        elif row[3].endswith('operadeparis.fr'):
+            row[5] = 'good'
+        elif row[3].endswith('firsttechfed.com'):
+            row[5] = 'good'
+        elif row[3].endswith('ieee.org'):
+            row[5] = 'good'
+        elif row[3].endswith('linkedin.com'):
+            row[5] = 'good'
+        elif row[3].endswith('floridapanthers.com'):
+            row[5] = 'good'
+        elif row[3].endswith('bounces.google.com'):
+            row[5] = 'good'
+        elif row[3].endswith('coursera.org'):
+            row[5] = 'good'
+        elif row[3].endswith('tiaa.org'):
+            row[5] = 'good'
+        elif row[3].endswith('kl-wines.com'):
+            row[5] = 'good'
+        elif row[3].endswith('quora.com'):
+            row[5] = 'good'
+        elif row[3].endswith('evgonetwork.com'):
+            row[5] = 'good'
+        elif row[3].endswith('pinterest.com'):
+            row[5] = 'good'
+        elif row[3].endswith('columbia.edu'):
+            row[5] = 'good'
+        elif row[3].endswith('ibmsecu.org'):
+            row[5] = 'good'
+        elif row[3].endswith('everbridge.net'):
+            row[5] = 'good'
     out.writerow(row)
-        
